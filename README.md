@@ -2,7 +2,7 @@
 
 Some function will NOT work properly.
 
-----------------------------------------------
+---
 <div align="center">
 
 ![Logo](logo.png)
