@@ -2,7 +2,7 @@
 
 Some function will NOT work properly.
 
-
+----------------------------------------------
 <div align="center">
 
 ![Logo](logo.png)
@@ -153,29 +153,29 @@ AIUI 是一个以单页前端为核心、同时提供 Electron 桌面壳的 AI �
 
 直接打开 `index.html` 即可运行基础前端界面。
 
-### Electron 方式
+### Tauri 方式
 
 ```bash
-npm install
-npm start
+#安装tauri-cli
+cargo install tauri-cli
+cargo tauri dev
 ```
 
 ---
 
-## Windows 构建
+## Windows,MacOS,Linux 构建
 
-项目当前使用 `electron-builder` 生成以下 Windows 产物：
+项目当前使用 `tauri-cli` 生成产物：
 
-- Portable：`AIUI6.0.0Canary3-Portable.exe`
-- Setup：`AIUI6.0.0Canary3-Setup.exe`
 
 构建命令：
 
 ```bash
-npm run build
+cargo install tauri-cli
+cargo tauri build
 ```
 
-构建输出目录：`dist/`
+构建输出目录：`src-tauri/target/release/bundle`
 
 ---
 
@@ -194,8 +194,7 @@ npm run build
 
 ## 版本信息
 
-- 当前版本：`V6.0.0 Canary 3`
-- 当前构建标识：`build20260811`
+- 当前版本：`V6.0.0 Canary 3 tauri ver`
 
 ---
 
