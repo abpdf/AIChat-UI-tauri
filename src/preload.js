@@ -1,59 +1,78 @@
-const { contextBridge, ipcRenderer } = require("electron");
+//fake electronAPI
+  // ---------- Tauri 2.x 全局 API 安全获取 ----------
+  if (typeof window.__TAURI__ === 'undefined') {
+    // 纯浏览器调试时，给个空对象防报错
+    window.__TAURI__ = { core: { invoke: () => {} }, event: { listen: () => {} } };
+  }
+  // 2.x 中 invoke 在 core 命名空间下
+  const invoke = window.__TAURI__.core.invoke;
+  const { listen } = window.__TAURI__.event;
 
-contextBridge.exposeInMainWorld("electronAPI", {
+  // ---------- 完整模拟原 preload.js 的 electronAPI ----------
+  window.electronAPI = {
     isElectron: true,
-    openAudioChat: (payload) => ipcRenderer.invoke("audio-chat:open", payload),
-    openDesktopWork: (payload) => ipcRenderer.invoke("desktop-work:open", payload),
-    getAudioChatSession: () => ipcRenderer.invoke("audio-chat:get-session"),
-    getDesktopWorkSession: () => ipcRenderer.invoke("desktop-work:get-session"),
-    checkpointAudioChat: (turns) => ipcRenderer.invoke("audio-chat:checkpoint", turns),
-    completeAudioChat: (turns) => ipcRenderer.invoke("audio-chat:complete", turns),
-    completeDesktopWork: (turns) => ipcRenderer.invoke("desktop-work:complete", turns),
+
+    // 窗口/会话操作
+    openAudioChat: (payload) => invoke('audio-chat:open', payload),
+    openDesktopWork: (payload) => invoke('desktop-work:open', payload),
+    getAudioChatSession: () => invoke('audio-chat:get-session'),
+    getDesktopWorkSession: () => invoke('desktop-work:get-session'),
+    checkpointAudioChat: (turns) => invoke('audio-chat:checkpoint', turns),
+    completeAudioChat: (turns) => invoke('audio-chat:complete', turns),
+    completeDesktopWork: (turns) => invoke('desktop-work:complete', turns),
+
+    // 事件监听（后端推送）
     onAudioChatCompleted: (callback) => {
-        const listener = (_event, payload) => callback(payload);
-        ipcRenderer.on("audio-chat:completed", listener);
-        return () => ipcRenderer.removeListener("audio-chat:completed", listener);
+      const unlisten = listen('ipc-back:audio-chat:completed', (e) => callback(e.payload));
+      return () => unlisten.then(f => f());
     },
-    generateVoicePreset: (config) => ipcRenderer.invoke("audio-chat:generate-preset", config),
-    getVoicePreset: (config) => ipcRenderer.invoke("audio-chat:get-preset", config),
-    getDesktopVoicePreset: (config) => ipcRenderer.invoke("desktop-work:get-preset", config),
-    requestFishSpeech: (request) => ipcRenderer.invoke("audio-chat:tts", request),
-    requestDesktopFishSpeech: (request) => ipcRenderer.invoke("desktop-work:tts", request),
-    setDesktopWorkInteractive: (interactive) => ipcRenderer.invoke("desktop-work:set-interactive", interactive),
+    onTrayAction: (callback) => {
+      const unlisten = listen('ipc-back:tray:action', (e) => callback(e.payload));
+      return () => unlisten.then(f => f());
+    },
     onDesktopScreenshotCaptured: (callback) => {
-        const listener = (_event, payload) => callback(payload);
-        ipcRenderer.on("desktop-work:screenshot-captured", listener);
-        return () => ipcRenderer.removeListener("desktop-work:screenshot-captured", listener);
+      const unlisten = listen('ipc-back:desktop-work:screenshot-captured', (e) => callback(e.payload));
+      return () => unlisten.then(f => f());
     },
     onDesktopScreenshotError: (callback) => {
-        const listener = (_event, message) => callback(message);
-        ipcRenderer.on("desktop-work:screenshot-error", listener);
-        return () => ipcRenderer.removeListener("desktop-work:screenshot-error", listener);
+      const unlisten = listen('ipc-back:desktop-work:screenshot-error', (e) => callback(e.payload));
+      return () => unlisten.then(f => f());
     },
-    signalRendererReady: () => ipcRenderer.send("renderer:ready"),
-    updateAppState: (state) => ipcRenderer.send("app-state:update", state),
-    onTrayAction: (callback) => {
-        const listener = (_event, payload) => callback(payload);
-        ipcRenderer.on("tray:action", listener);
-        return () => ipcRenderer.removeListener("tray:action", listener);
+
+    // 讯飞语音
+    startXunfei: (credentials) => invoke('xunfei:start', credentials),
+    sendXunfeiAudio: (samples) => {
+      invoke('xunfei:audio', { samples: Array.from(samples || []) }).catch(e => console.warn(e));
     },
-    startXunfei: (credentials) => ipcRenderer.invoke("xunfei:start", credentials),
-    sendXunfeiAudio: (samples) => ipcRenderer.send("xunfei:audio", Array.from(samples || [])),
-    finishXunfei: () => ipcRenderer.invoke("xunfei:finish"),
-    abortXunfei: () => ipcRenderer.invoke("xunfei:abort"),
+    finishXunfei: () => invoke('xunfei:finish'),
+    abortXunfei: () => invoke('xunfei:abort'),
     onXunfeiPartial: (callback) => {
-        const listener = (_event, text) => callback(text);
-        ipcRenderer.on("xunfei:partial", listener);
-        return () => ipcRenderer.removeListener("xunfei:partial", listener);
+      const unlisten = listen('ipc-back:xunfei:partial', (e) => callback(e.payload));
+      return () => unlisten.then(f => f());
     },
     onXunfeiFinal: (callback) => {
-        const listener = (_event, text) => callback(text);
-        ipcRenderer.on("xunfei:final", listener);
-        return () => ipcRenderer.removeListener("xunfei:final", listener);
+      const unlisten = listen('ipc-back:xunfei:final', (e) => callback(e.payload));
+      return () => unlisten.then(f => f());
     },
     onXunfeiError: (callback) => {
-        const listener = (_event, message) => callback(message);
-        ipcRenderer.on("xunfei:error", listener);
-        return () => ipcRenderer.removeListener("xunfei:error", listener);
-    }
-});
+      const unlisten = listen('ipc-back:xunfei:error', (e) => callback(e.payload));
+      return () => unlisten.then(f => f());
+    },
+
+    // TTS 与预设
+    generateVoicePreset: (config) => invoke('audio-chat:generate-preset', config),
+    getVoicePreset: (config) => invoke('audio-chat:get-preset', config),
+    getDesktopVoicePreset: (config) => invoke('desktop-work:get-preset', config),
+    requestFishSpeech: (request) => invoke('audio-chat:tts', request),
+    requestDesktopFishSpeech: (request) => invoke('desktop-work:tts', request),
+
+    // 桌面交互
+    setDesktopWorkInteractive: (interactive) => invoke('desktop-work:set-interactive', interactive),
+
+    // 生命周期通知
+    signalRendererReady: () => invoke('renderer:ready'),
+    updateAppState: (state) => invoke('app-state:update', state),
+  };
+
+  window.ipcRenderer = window.electronAPI;
+  console.log('✅ [Shim] Tauri 2.x electronAPI mocked');
