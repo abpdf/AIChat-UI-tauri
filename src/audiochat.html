@@ -11,8 +11,8 @@
         }
     </script>
     <title>AIUI 语音聊天</title>
-    <script src="node_modules/onnxruntime-web/dist/ort.min.js"></script>
-    <script src="voicechat-api.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.27.0/dist/ort.min.js"></script>>
+    <script src="/voicechat-api.js"></script>
     <style>
         * {
             box-sizing: border-box;
@@ -556,13 +556,14 @@
         </div>
     </main>
     <div class="toast" id="toast"></div>
-    <script src="preload.js"></script>
-    <script>
+    <script type="module">
+        console.log(window.electronAPI)
         const bridge = window.electronAPI;
+        console.log(bridge)
         const desktopMode = document.documentElement.classList.contains('desktop-work');
         const ortRuntime = window.ort;
-        const VAD_MODEL_URL = './silero_vad.onnx';
-        const ORT_WASM_PATH = new URL('./node_modules/onnxruntime-web/dist/', window.location.href).href;
+        const VAD_MODEL_URL = '';
+        const ORT_WASM_PATH = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.27.0/dist/';
 
         function mergeFloat32(chunks) {
             let length = 0;

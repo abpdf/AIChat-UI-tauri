@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
-use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+use tauri::tray::TrayIconBuilder;
 use tauri::{
     AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
@@ -30,6 +30,23 @@ type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 const PRESET_TEXTS_A: [&str; 4] = ["嗯……", "哦？", "欸？", "哦！"];
 const PRESET_TEXTS_B: [&str; 2] = ["我想想……", "等一下啊……"];
 const PRESET_TEXTS_C: [&str; 3] = ["让我看一下啊……", "稍等，我看看……", "欸？我看到了……"];
+
+// 日志宏
+macro_rules! log_info {
+    ($($arg:tt)*) => {
+        eprintln!("[INFO] {}", format!($($arg)*))
+    };
+}
+macro_rules! log_warn {
+    ($($arg:tt)*) => {
+        eprintln!("[WARN] {}", format!($($arg)*))
+    };
+}
+macro_rules! log_error {
+    ($($arg:tt)*) => {
+        eprintln!("[ERROR] {}", format!($($arg)*))
+    };
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -210,6 +227,7 @@ fn has_conversation_window(app: &AppHandle) -> bool {
 }
 
 fn show_main_window(app: &AppHandle) {
+    log_info!("显示主窗口");
     if let Some(win) = app.get_webview_window("main") {
         if win.is_minimized().unwrap_or(false) {
             win.unminimize().ok();
@@ -217,11 +235,13 @@ fn show_main_window(app: &AppHandle) {
         win.show().ok();
         win.set_focus().ok();
     } else {
+        log_warn!("主窗口不存在，尝试创建");
         create_main_window(app).ok();
     }
 }
 
 fn create_main_window(app: &AppHandle) -> Result<(), String> {
+    log_info!("创建主窗口");
     app.state::<AppState>()
         .main_ready
         .store(false, Ordering::SeqCst);
@@ -231,7 +251,10 @@ fn create_main_window(app: &AppHandle) -> Result<(), String> {
         .inner_size(1200.0, 800.0)
         .min_inner_size(400.0, 300.0)
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            log_error!("创建主窗口失败: {}", e);
+            e.to_string()
+        })?;
 
     let app_clone = app.clone();
     let win_clone = win.clone();
@@ -240,11 +263,15 @@ fn create_main_window(app: &AppHandle) -> Result<(), String> {
         WindowEvent::CloseRequested { api, .. } => {
             let state = app_clone.state::<AppState>();
             if !state.is_quitting.load(Ordering::SeqCst) {
+                log_info!("主窗口关闭请求被阻止，隐藏窗口");
                 api.prevent_close();
                 win_clone.hide().ok();
+            } else {
+                log_info!("主窗口允许关闭（应用退出）");
             }
         }
         WindowEvent::Destroyed => {
+            log_info!("主窗口已销毁");
             app_clone
                 .state::<AppState>()
                 .main_ready
@@ -257,6 +284,7 @@ fn create_main_window(app: &AppHandle) -> Result<(), String> {
 }
 
 fn send_main_command(app: &AppHandle, action: &str, payload: Value) {
+    log_info!("发送主窗口命令: action={}, payload={:?}", action, payload);
     let state = app.state::<AppState>();
     let mut command = payload;
     command["action"] = Value::String(action.to_string());
@@ -268,6 +296,7 @@ fn send_main_command(app: &AppHandle, action: &str, payload: Value) {
         }
     }
 
+    log_warn!("主窗口未就绪，命令加入待处理队列");
     state.pending_main_commands.lock().unwrap().push(command);
 }
 
@@ -283,6 +312,7 @@ fn flush_main_commands(app: &AppHandle) {
     };
 
     if let Some(win) = app.get_webview_window("main") {
+        log_info!("刷新待处理主窗口命令，数量: {}", commands.len());
         for command in commands {
             win.emit("tray:action", &command).ok();
         }
@@ -290,14 +320,17 @@ fn flush_main_commands(app: &AppHandle) {
 }
 
 fn emit_audio_completion(app: &AppHandle, reason: &str, turns_override: Option<Vec<Turn>>) {
+    log_info!("触发音频完成事件: reason={}", reason);
     let state = app.state::<AppState>();
 
     if state.audio_completion_sent.swap(true, Ordering::SeqCst) {
+        log_warn!("音频完成事件已发送，忽略重复触发");
         return;
     }
 
     let guard = state.audio_session.lock().unwrap();
     let Some(session) = guard.as_ref() else {
+        log_warn!("没有活动会话，无法发送音频完成事件");
         return;
     };
 
@@ -313,10 +346,12 @@ fn emit_audio_completion(app: &AppHandle, reason: &str, turns_override: Option<V
 
     if let Some(win) = app.get_webview_window("main") {
         win.emit("audio-chat:completed", payload).ok();
+        log_info!("音频完成事件已发送到主窗口");
     }
 }
 
 fn abort_xunfei_session(app: &AppHandle) {
+    log_info!("中止讯飞会话");
     if let Some(handle) = app.state::<AppState>().xunfei.lock().unwrap().take() {
         handle.abort_tx.send(()).ok();
     }
@@ -327,8 +362,11 @@ fn clear_desktop_shortcut(app: &AppHandle) {
     let shortcut_str = state.desktop_shortcut.lock().unwrap().take();
 
     if let Some(shortcut_str) = shortcut_str {
+        log_info!("注销桌面快捷键: {}", shortcut_str);
         if let Ok(shortcut) = shortcut_str.parse::<Shortcut>() {
             app.global_shortcut().unregister(shortcut).ok();
+        } else {
+            log_warn!("无法解析快捷键字符串，未注销: {}", shortcut_str);
         }
     }
 }
@@ -343,13 +381,20 @@ fn register_desktop_shortcut(app: &AppHandle, settings: &Value) -> Result<String
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "Control+A".to_string());
 
+    log_info!("注册桌面快捷键: {}", accelerator);
     let shortcut = accelerator
         .parse::<Shortcut>()
-        .map_err(|e| format!("无法解析快捷键 {accelerator}: {e}"))?;
+        .map_err(|e| {
+            log_error!("解析快捷键失败: {} - {}", accelerator, e);
+            format!("无法解析快捷键 {accelerator}: {e}")
+        })?;
 
     app.global_shortcut()
         .register(shortcut)
-        .map_err(|e| format!("无法注册传图快捷键：{accelerator}: {e}"))?;
+        .map_err(|e| {
+            log_error!("注册快捷键失败: {} - {}", accelerator, e);
+            format!("无法注册传图快捷键：{accelerator}: {e}")
+        })?;
 
     app.state::<AppState>()
         .desktop_shortcut
@@ -357,6 +402,7 @@ fn register_desktop_shortcut(app: &AppHandle, settings: &Value) -> Result<String
         .unwrap()
         .replace(accelerator.clone());
 
+    log_info!("快捷键注册成功: {}", accelerator);
     Ok(accelerator)
 }
 
@@ -391,8 +437,10 @@ fn fish_audio_config_from_value(value: &Value) -> (String, String, String) {
 
 async fn request_fish_audio(text: &str, config: &Value) -> Result<Vec<u8>, String> {
     let (base, api_key, voice_id) = fish_audio_config_from_value(config);
+    log_info!("请求 Fish Audio TTS: base={}, voiceId={}, text_len={}", base, voice_id, text.len());
 
     if api_key.is_empty() || voice_id.is_empty() {
+        log_error!("Fish Audio API Key 或音色 ID 为空");
         return Err("请先填写 Fish Audio API Key 和音色 ID".into());
     }
 
@@ -409,6 +457,7 @@ async fn request_fish_audio(text: &str, config: &Value) -> Result<Vec<u8>, Strin
     let mut last_error = String::new();
 
     for attempt in 0..2 {
+        log_info!("Fish Audio 请求尝试 {}/2", attempt + 1);
         let response_result = tokio::time::timeout(
             Duration::from_secs(90),
             client
@@ -423,6 +472,7 @@ async fn request_fish_audio(text: &str, config: &Value) -> Result<Vec<u8>, Strin
         let response = match response_result {
             Ok(Ok(resp)) => resp,
             Ok(Err(e)) => {
+                log_error!("Fish Audio 请求错误: {}", e);
                 last_error = format!("Fish Audio 请求失败: {e}");
                 if attempt == 0 {
                     continue;
@@ -430,6 +480,7 @@ async fn request_fish_audio(text: &str, config: &Value) -> Result<Vec<u8>, Strin
                 return Err(last_error);
             }
             Err(_) => {
+                log_error!("Fish Audio 请求超时");
                 last_error = "Fish Audio 请求超时".to_string();
                 if attempt == 0 {
                     continue;
@@ -438,20 +489,27 @@ async fn request_fish_audio(text: &str, config: &Value) -> Result<Vec<u8>, Strin
             }
         };
 
-        if response.status().is_success() {
-            let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+        let status = response.status();
+        if status.is_success() {
+            let bytes = response.bytes().await.map_err(|e| {
+                log_error!("读取 Fish Audio 响应失败: {}", e);
+                e.to_string()
+            })?;
             if bytes.is_empty() {
+                log_error!("Fish Audio 返回空音频");
                 return Err("Fish Audio 返回了空音频".into());
             }
+            log_info!("Fish Audio 请求成功，音频大小: {} bytes", bytes.len());
             return Ok(bytes.to_vec());
         }
 
-        let status = response.status().as_u16();
+        let status_code = status.as_u16();
         let detail = response.text().await.unwrap_or_default();
         let detail = detail.chars().take(500).collect::<String>();
-        last_error = format!("Fish Audio 请求失败 ({status}): {detail}");
+        log_warn!("Fish Audio 请求失败，状态码: {}, 详情: {}", status_code, detail);
+        last_error = format!("Fish Audio 请求失败 ({status_code}): {detail}");
 
-        if attempt == 0 && (status == 401 || status >= 500) {
+        if attempt == 0 && (status_code == 401 || status_code >= 500) {
             continue;
         }
 
@@ -467,22 +525,31 @@ async fn request_fish_audio(text: &str, config: &Value) -> Result<Vec<u8>, Strin
 
 async fn generate_voice_preset(app: &AppHandle, config: &Value) -> Result<Value, String> {
     let (api_base, api_key, voice_id) = fish_audio_config_from_value(config);
+    log_info!("生成语音预置: base={}, voiceId={}", api_base, voice_id);
 
     if api_key.is_empty() || voice_id.is_empty() {
+        log_error!("生成预置失败：缺少 API Key 或音色 ID");
         return Err("请先填写 Fish Audio API Key 和音色 ID".into());
     }
 
     let data_dir = app
         .path()
         .app_data_dir()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            log_error!("获取数据目录失败: {}", e);
+            e.to_string()
+        })?;
     let dir = data_dir
         .join("voice-presets")
         .join(preset_directory_key(&api_base, &voice_id));
 
+    log_info!("预置目录: {:?}", dir);
     tokio::fs::create_dir_all(&dir)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            log_error!("创建预置目录失败: {}", e);
+            e.to_string()
+        })?;
 
     let mut manifest = json!({
         "apiBase": api_base,
@@ -501,10 +568,14 @@ async fn generate_voice_preset(app: &AppHandle, config: &Value) -> Result<Value,
         let mut files = Vec::new();
         for (index, text) in texts.iter().enumerate() {
             let filename = format!("{prefix}-{index}.mp3");
+            log_info!("生成预置音频: group={}, index={}, filename={}", group, index, filename);
             let audio = request_fish_audio(text, config).await?;
             tokio::fs::write(dir.join(&filename), &audio)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| {
+                    log_error!("写入预置音频文件失败: {} - {}", filename, e);
+                    e.to_string()
+                })?;
             files.push(Value::String(filename));
         }
         manifest[group] = Value::Array(files);
@@ -512,12 +583,19 @@ async fn generate_voice_preset(app: &AppHandle, config: &Value) -> Result<Value,
 
     tokio::fs::write(
         dir.join("manifest.json"),
-        serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?,
+        serde_json::to_string_pretty(&manifest).map_err(|e| {
+            log_error!("写入预置清单失败: {}", e);
+            e.to_string()
+        })?,
     )
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| {
+        log_error!("写入预置清单失败: {}", e);
+        e.to_string()
+    })?;
 
     let count = PRESET_TEXTS_A.len() + PRESET_TEXTS_B.len() + PRESET_TEXTS_C.len();
+    log_info!("预置生成完成，共 {} 个音频文件", count);
 
     Ok(json!({ "ok": true, "count": count }))
 }
@@ -535,6 +613,7 @@ async fn load_preset_group(dir: &Path, files: &Value) -> Option<Value> {
 
 async fn read_voice_preset(app: &AppHandle, config: &Value) -> Option<Value> {
     let (api_base, _, voice_id) = fish_audio_config_from_value(config);
+    log_info!("读取语音预置: base={}, voiceId={}", api_base, voice_id);
     if voice_id.is_empty() {
         return None;
     }
@@ -551,6 +630,7 @@ async fn read_voice_preset(app: &AppHandle, config: &Value) -> Option<Value> {
     )
     .ok()?;
 
+    log_info!("预置清单读取成功");
     let group_a = load_preset_group(&dir, manifest.get("groupA").unwrap_or(&json!([]))).await;
     let group_b = load_preset_group(&dir, manifest.get("groupB").unwrap_or(&json!([]))).await;
     let group_c = load_preset_group(&dir, manifest.get("groupC").unwrap_or(&json!([]))).await;
@@ -607,6 +687,7 @@ fn xunfei_frame(app_id: &str, status: i32, pcm: &[u8]) -> String {
 }
 
 async fn send_xunfei_frame(ws: &mut WsStream, app_id: &str, status: i32, pcm: &[u8]) -> Result<(), String> {
+    log_info!("发送讯飞帧: status={}, pcm_size={}", status, pcm.len());
     ws.send(Message::Text(xunfei_frame(app_id, status, pcm)))
         .await
         .map_err(|e| e.to_string())
@@ -635,6 +716,7 @@ async fn flush_xunfei_samples(
             pcm.extend_from_slice(&int16.to_le_bytes());
         }
 
+        log_info!("刷新讯飞样本，发送 {} 个样本", count);
         send_xunfei_frame(ws, app_id, 1, &pcm).await.ok();
     }
 }
@@ -650,6 +732,7 @@ fn handle_xunfei_message(
     let response: Value = match serde_json::from_str(raw) {
         Ok(v) => v,
         Err(e) => {
+            log_error!("讯飞响应解析失败: {}", e);
             app.emit_to(label, "xunfei:error", format!("讯飞响应解析失败: {e}"))
                 .ok();
             return false;
@@ -661,6 +744,8 @@ fn handle_xunfei_message(
             .get("message")
             .and_then(|v| v.as_str())
             .unwrap_or("未知错误");
+        log_error!("讯飞返回错误: code={}, message={}", 
+            response.get("code").and_then(|v| v.as_i64()).unwrap_or(0), message);
         app.emit_to(label, "xunfei:error", message).ok();
         return false;
     }
@@ -689,6 +774,7 @@ fn handle_xunfei_message(
                 } else {
                     "xunfei:partial"
                 };
+                log_info!("收到讯飞识别文本: event={}, text={}", event, text);
                 app.emit_to(label, event, &text).ok();
 
                 if finishing {
@@ -706,6 +792,7 @@ fn handle_xunfei_message(
         .unwrap_or(0)
         == 2
     {
+        log_info!("讯飞返回最终状态(status=2)");
         if let Some(ref mut deadline) = deadline {
             *deadline = tokio::time::Instant::now() + Duration::from_millis(250);
         }
@@ -723,9 +810,11 @@ async fn run_xunfei_session(
     result_tx: oneshot::Sender<String>,
     label: String,
 ) {
+    log_info!("启动讯飞会话: label={}", label);
     let url = match xunfei_build_url(&creds.api_key, &creds.api_secret) {
         Ok(url) => url,
         Err(e) => {
+            log_error!("构建讯飞 URL 失败: {}", e);
             app.emit_to(label.clone(), "xunfei:error", e).ok();
             result_tx.send(String::new()).ok();
             return;
@@ -733,8 +822,12 @@ async fn run_xunfei_session(
     };
 
     let (mut ws, _) = match connect_async(url).await {
-        Ok(v) => v,
+        Ok(v) => {
+            log_info!("讯飞 WebSocket 连接成功");
+            v
+        }
         Err(e) => {
+            log_error!("讯飞 WebSocket 连接失败: {}", e);
             app.emit_to(
                 label.clone(),
                 "xunfei:error",
@@ -750,6 +843,7 @@ async fn run_xunfei_session(
         .await
         .is_err()
     {
+        log_error!("发送初始帧失败");
         result_tx.send(String::new()).ok();
         return;
     }
@@ -763,10 +857,12 @@ async fn run_xunfei_session(
             samples_opt = audio_rx.recv() => {
                 match samples_opt {
                     Some(input) => {
+                        log_info!("收到音频样本，数量: {}", input.len());
                         samples.extend(input);
                         flush_xunfei_samples(&mut ws, &creds.app_id, &mut samples, false).await;
                     }
                     None => {
+                        log_info!("音频通道关闭，结束讯飞会话");
                         result_tx.send(latest_text.clone()).ok();
                         let _ = ws.close(None).await;
                         return;
@@ -775,6 +871,7 @@ async fn run_xunfei_session(
             }
 
             _ = &mut finish_rx => {
+                log_info!("收到结束信号，开始发送最终帧");
                 finishing = true;
                 flush_xunfei_samples(&mut ws, &creds.app_id, &mut samples, true).await;
                 send_xunfei_frame(&mut ws, &creds.app_id, 2, &[]).await.ok();
@@ -782,6 +879,7 @@ async fn run_xunfei_session(
             }
 
             _ = &mut abort_rx => {
+                log_info!("收到中止信号，立即结束讯飞会话");
                 result_tx.send(latest_text.clone()).ok();
                 let _ = ws.close(None).await;
                 return;
@@ -790,6 +888,7 @@ async fn run_xunfei_session(
             msg = ws.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
+                        log_info!("收到讯飞 WebSocket 消息");
                         let mut deadline: Option<tokio::time::Instant> = None;
                         if !handle_xunfei_message(&app, &label, &text, &mut latest_text, finishing, &mut deadline) {
                             result_tx.send(latest_text.clone()).ok();
@@ -798,11 +897,13 @@ async fn run_xunfei_session(
                         }
                     }
                     Some(Ok(Message::Close(_))) | None => {
+                        log_info!("讯飞 WebSocket 连接关闭");
                         result_tx.send(latest_text.clone()).ok();
                         return;
                     }
                     Some(Ok(_)) => {}
                     Some(Err(e)) => {
+                        log_error!("讯飞 WebSocket 错误: {}", e);
                         app.emit_to(label.clone(), "xunfei:error", e.to_string()).ok();
                         result_tx.send(latest_text.clone()).ok();
                         let _ = ws.close(None).await;
@@ -814,15 +915,18 @@ async fn run_xunfei_session(
     }
 
     let mut deadline = tokio::time::Instant::now() + Duration::from_millis(3500);
+    log_info!("等待讯飞最终结果，超时时间 3500ms");
 
     loop {
         let now = tokio::time::Instant::now();
         if now >= deadline {
+            log_info!("等待最终结果超时");
             break;
         }
 
         match tokio::time::timeout(deadline - now, ws.next()).await {
             Ok(Some(Ok(Message::Text(text)))) => {
+                log_info!("收到最终结果消息");
                 let mut deadline_opt = Some(deadline);
                 if !handle_xunfei_message(&app, &label, &text, &mut latest_text, true, &mut deadline_opt) {
                     break;
@@ -833,6 +937,7 @@ async fn run_xunfei_session(
             }
             Ok(Some(Ok(Message::Close(_)))) | Ok(None) => break,
             Ok(Some(Err(e))) => {
+                log_error!("等待最终结果时 WebSocket 错误: {}", e);
                 app.emit_to(label.clone(), "xunfei:error", e.to_string()).ok();
                 break;
             }
@@ -841,6 +946,7 @@ async fn run_xunfei_session(
         }
     }
 
+    log_info!("讯飞会话结束，最终文本: {}", latest_text);
     result_tx.send(latest_text.clone()).ok();
     let _ = ws.close(None).await;
 }
@@ -854,6 +960,7 @@ fn screenshot_quality_settings(value: &str) -> (u32, u8) {
 }
 
 async fn capture_current_display_screenshot(app: &AppHandle) -> Result<(), String> {
+    log_info!("开始截取当前屏幕");
     let quality = {
         let state = app.state::<AppState>();
         let guard = state.audio_session.lock().unwrap();
@@ -864,29 +971,40 @@ async fn capture_current_display_screenshot(app: &AppHandle) -> Result<(), Strin
             .unwrap_or("balanced")
             .to_string()
     };
+    log_info!("截图质量设置: {}", quality);
 
     let audio_window = app.get_webview_window("desktop");
     if let Some(win) = &audio_window {
-        win.hide().ok(); // 代替 set_opacity(0.0)
+        log_info!("隐藏桌面窗口以便截图");
+        win.hide().ok();
     }
     tokio::time::sleep(Duration::from_millis(70)).await;
 
     let result = async {
-        let monitors = xcap::Monitor::all().map_err(|e| e.to_string())?;
+        let monitors = xcap::Monitor::all().map_err(|e| {
+            log_error!("枚举显示器失败: {}", e);
+            e.to_string()
+        })?;
         let monitor = monitors
             .into_iter()
             .next()
             .ok_or_else(|| "无法获取当前显示器截图".to_string())?;
+        log_info!("使用显示器: {:?}", monitor.name());
 
-        let image = monitor.capture_image().map_err(|e| e.to_string())?;
+        let image = monitor.capture_image().map_err(|e| {
+            log_error!("截取屏幕失败: {}", e);
+            e.to_string()
+        })?;
         let (w, h) = image.dimensions();
+        log_info!("原始截图尺寸: {}x{}", w, h);
 
-        let (max_edge, jpeg_quality) = screenshot_quality_settings(&quality);
+        let (max_edge, _jpeg_quality) = screenshot_quality_settings(&quality);
         let max_edge_px = max_edge;
         let resized = if w.max(h) > max_edge_px {
             let scale = max_edge_px as f64 / w.max(h) as f64;
             let new_w = (w as f64 * scale).round() as u32;
             let new_h = (h as f64 * scale).round() as u32;
+            log_info!("缩放截图到: {}x{}", new_w, new_h);
             image::imageops::resize(&image, new_w, new_h, FilterType::Lanczos3)
         } else {
             image
@@ -895,7 +1013,11 @@ async fn capture_current_display_screenshot(app: &AppHandle) -> Result<(), Strin
         let mut jpeg_bytes = Vec::new();
         DynamicImage::ImageRgba8(resized)
             .write_to(&mut Cursor::new(&mut jpeg_bytes), image::ImageFormat::Jpeg)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                log_error!("JPEG 编码失败: {}", e);
+                e.to_string()
+            })?;
+        log_info!("JPEG 编码成功，大小: {} bytes", jpeg_bytes.len());
 
         Ok::<String, String>(format!(
             "data:image/jpeg;base64,{}",
@@ -905,7 +1027,8 @@ async fn capture_current_display_screenshot(app: &AppHandle) -> Result<(), Strin
     .await;
 
     if let Some(win) = &audio_window {
-        win.show().ok(); // 代替 set_opacity(1.0)
+        log_info!("恢复显示桌面窗口");
+        win.show().ok();
     }
 
     let data_url = result?;
@@ -915,6 +1038,7 @@ async fn capture_current_display_screenshot(app: &AppHandle) -> Result<(), Strin
         let mut guard = state.audio_session.lock().unwrap();
         if let Some(session) = guard.as_mut() {
             session.pending_screenshot = Some(data_url.clone());
+            log_info!("截图数据已保存到会话");
         }
     }
 
@@ -927,7 +1051,11 @@ async fn capture_current_display_screenshot(app: &AppHandle) -> Result<(), Strin
                 "quality": quality,
             }),
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            log_error!("发送截图事件失败: {}", e);
+            e.to_string()
+        })?;
+        log_info!("截图事件已发送");
     }
 
     Ok(())
@@ -939,11 +1067,14 @@ async fn open_collaboration_window(
     payload: Option<OpenCollaborationPayload>,
     mode: &str,
 ) -> Result<Value, String> {
+    log_info!("打开协作窗口: mode={}", mode);
     if !is_main_sender(&window) {
+        log_error!("非法的协作窗口请求");
         return Err("非法的协作窗口请求".into());
     }
 
     if has_conversation_window(&app) {
+        log_warn!("已有协作窗口，聚焦现有窗口");
         if let Some(win) = app.get_webview_window("audio").or_else(|| app.get_webview_window("desktop")) {
             win.set_focus().ok();
         }
@@ -983,6 +1114,7 @@ async fn open_collaboration_window(
         pending_turns: Vec::new(),
         pending_screenshot: None,
     };
+    log_info!("创建会话: sessionId={}, mode={}", session.session_id, mode);
 
     let mut shortcut = String::new();
 
@@ -1008,6 +1140,7 @@ async fn open_collaboration_window(
         let height = 156.0;
         let x = display_x + (display_width - width) / 2.0;
         let y = display_y + display_height - height - 12.0;
+        log_info!("桌面协作窗口尺寸: {}x{}, 位置: ({}, {})", width, height, x, y);
 
         WebviewWindowBuilder::new(&app, "desktop", WebviewUrl::App("desktopwork.html".into()))
             .inner_size(width, height)
@@ -1021,11 +1154,17 @@ async fn open_collaboration_window(
             .skip_taskbar(true)
             .resizable(false)
             .build()
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                log_error!("创建桌面协作窗口失败: {}", e);
+                e.to_string()
+            })?;
 
         if let Some(win) = app.get_webview_window("desktop") {
             win.set_always_on_top(true).ok();
-            win.set_ignore_cursor_events(true).map_err(|e| e.to_string())?;
+            win.set_ignore_cursor_events(true).map_err(|e| {
+                log_error!("设置鼠标穿透失败: {}", e);
+                e.to_string()
+            })?;
         }
 
         if let Some(main) = app.get_webview_window("main") {
@@ -1034,12 +1173,16 @@ async fn open_collaboration_window(
 
         "desktop"
     } else {
+        log_info!("创建语音聊天窗口");
         WebviewWindowBuilder::new(&app, "audio", WebviewUrl::App("audiochat.html".into()))
             .inner_size(600.0, 600.0)
             .min_inner_size(520.0, 520.0)
             .visible(false)
             .build()
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                log_error!("创建语音聊天窗口失败: {}", e);
+                e.to_string()
+            })?;
         "audio"
     };
 
@@ -1047,6 +1190,7 @@ async fn open_collaboration_window(
         let state = app.state::<AppState>();
         let mut guard = state.audio_session.lock().unwrap();
         *guard = Some(session.clone());
+        log_info!("会话已保存到状态");
     }
 
     if let Some(win) = app.get_webview_window(label) {
@@ -1054,6 +1198,7 @@ async fn open_collaboration_window(
         let label_owned = label.to_string();
         win.on_window_event(move |event| match event {
             WindowEvent::CloseRequested { .. } => {
+                log_info!("协作窗口关闭请求: {}", label_owned);
                 emit_audio_completion(&app_clone, "window-close", None);
                 abort_xunfei_session(&app_clone);
                 clear_desktop_shortcut(&app_clone);
@@ -1069,6 +1214,7 @@ async fn open_collaboration_window(
                 }
             }
             WindowEvent::Destroyed => {
+                log_info!("协作窗口已销毁: {}", label_owned);
                 let state = app_clone.state::<AppState>();
                 *state.audio_session.lock().unwrap() = None;
                 state.audio_completion_sent.store(false, Ordering::SeqCst);
@@ -1080,6 +1226,7 @@ async fn open_collaboration_window(
 
         win.show().ok();
         win.set_focus().ok();
+        log_info!("协作窗口已显示: {}", label);
     }
 
     refresh_tray_menu(&app);
@@ -1093,6 +1240,7 @@ async fn open_collaboration_window(
 }
 
 fn build_tray_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
+    log_info!("构建托盘菜单");
     let collaboration_disabled = has_conversation_window(app);
     let menu = Menu::new(app).map_err(|e| e.to_string())?;
 
@@ -1162,6 +1310,7 @@ fn build_tray_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
 }
 
 fn refresh_tray_menu(app: &AppHandle) {
+    log_info!("刷新托盘菜单");
     let menu = build_tray_menu(app).ok();
     if let Some(tray) = app.tray_by_id("main-tray") {
         tray.set_menu(menu).ok();
@@ -1169,6 +1318,7 @@ fn refresh_tray_menu(app: &AppHandle) {
 }
 
 fn create_tray(app: &AppHandle) -> Result<(), String> {
+    log_info!("创建系统托盘");
     let icon = app
         .default_window_icon()
         .cloned()
@@ -1181,14 +1331,36 @@ fn create_tray(app: &AppHandle) -> Result<(), String> {
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id.as_ref() {
-            "open_main" => show_main_window(app),
-            "new_audio" => send_main_command(app, "new-audio-chat", json!({})),
-            "new_desktop" => send_main_command(app, "new-desktop-work", json!({})),
-            "recent_audio" => send_main_command(app, "recent-audio-chat", json!({})),
-            "recent_desktop" => send_main_command(app, "recent-desktop-work", json!({})),
-            "clear_logs" => send_main_command(app, "clear-logs", json!({})),
-            "export_logs" => send_main_command(app, "export-logs", json!({})),
+            "open_main" => {
+                log_info!("托盘菜单: 打开主页面");
+                show_main_window(app);
+            }
+            "new_audio" => {
+                log_info!("托盘菜单: 开启新语音聊天");
+                send_main_command(app, "new-audio-chat", json!({}));
+            }
+            "new_desktop" => {
+                log_info!("托盘菜单: 开启新桌面协作");
+                send_main_command(app, "new-desktop-work", json!({}));
+            }
+            "recent_audio" => {
+                log_info!("托盘菜单: 从最近会话开启语音聊天");
+                send_main_command(app, "recent-audio-chat", json!({}));
+            }
+            "recent_desktop" => {
+                log_info!("托盘菜单: 从最近会话开启桌面协作");
+                send_main_command(app, "recent-desktop-work", json!({}));
+            }
+            "clear_logs" => {
+                log_info!("托盘菜单: 清除日志");
+                send_main_command(app, "clear-logs", json!({}));
+            }
+            "export_logs" => {
+                log_info!("托盘菜单: 导出日志");
+                send_main_command(app, "export-logs", json!({}));
+            }
             "quit" => {
+                log_info!("托盘菜单: 退出应用");
                 app.state::<AppState>()
                     .is_quitting
                     .store(true, Ordering::SeqCst);
@@ -1208,6 +1380,7 @@ async fn audio_chat_open(
     window: tauri::Window,
     payload: Option<OpenCollaborationPayload>,
 ) -> Result<Value, String> {
+    log_info!("Command: audio_chat_open");
     open_collaboration_window(app, window, payload, "audio").await
 }
 
@@ -1217,6 +1390,7 @@ async fn desktop_work_open(
     window: tauri::Window,
     payload: Option<OpenCollaborationPayload>,
 ) -> Result<Value, String> {
+    log_info!("Command: desktop_work_open");
     open_collaboration_window(app, window, payload, "desktop").await
 }
 
@@ -1225,11 +1399,14 @@ async fn audio_chat_get_session(
     app: AppHandle,
     window: tauri::Window,
 ) -> Result<Option<AudioSession>, String> {
+    log_info!("Command: audio_chat_get_session");
     if !is_audio_sender(&window) {
+        log_error!("非音频窗口调用");
         return Err("语音会话不存在".into());
     }
     let state = app.state::<AppState>();
     let guard = state.audio_session.lock().unwrap();
+    log_info!("返回音频会话: {:?}", guard.as_ref().map(|s| &s.session_id));
     Ok(guard.clone())
 }
 
@@ -1238,14 +1415,22 @@ async fn desktop_work_get_session(
     app: AppHandle,
     window: tauri::Window,
 ) -> Result<Option<AudioSession>, String> {
+    log_info!("Command: desktop_work_get_session");
     if !is_audio_sender(&window) {
+        log_error!("非音频窗口调用");
         return Err("桌面协作会话不存在".into());
     }
     let state = app.state::<AppState>();
     let guard = state.audio_session.lock().unwrap();
     match guard.as_ref() {
-        Some(session) if session.mode == "desktop" => Ok(guard.clone()),
-        _ => Err("桌面协作会话不存在".into()),
+        Some(session) if session.mode == "desktop" => {
+            log_info!("返回桌面协作会话: {:?}", session.session_id);
+            Ok(guard.clone())
+        }
+        _ => {
+            log_warn!("桌面协作会话不存在");
+            Err("桌面协作会话不存在".into())
+        }
     }
 }
 
@@ -1255,14 +1440,18 @@ async fn audio_chat_checkpoint(
     window: tauri::Window,
     turns: Option<Vec<Turn>>,
 ) -> Result<Value, String> {
+    log_info!("Command: audio_chat_checkpoint");
     if !is_audio_sender(&window) {
+        log_error!("非音频窗口调用");
         return Ok(json!({ "ok": false }));
     }
 
     let state = app.state::<AppState>();
     let mut guard = state.audio_session.lock().unwrap();
     if let Some(session) = guard.as_mut() {
-        session.pending_turns = sanitize_turns(turns);
+        let sanitized = sanitize_turns(turns);
+        log_info!("更新会话 pending_turns，数量: {}", sanitized.len());
+        session.pending_turns = sanitized;
     }
 
     Ok(json!({ "ok": true }))
@@ -1274,7 +1463,9 @@ async fn audio_chat_complete(
     window: tauri::Window,
     turns: Option<Vec<Turn>>,
 ) -> Result<Value, String> {
+    log_info!("Command: audio_chat_complete");
     if !is_audio_sender(&window) {
+        log_error!("非音频窗口调用");
         return Ok(json!({ "ok": false }));
     }
 
@@ -1292,6 +1483,7 @@ async fn audio_chat_complete(
 
     tokio::time::sleep(Duration::from_millis(120)).await;
     if let Some(win) = app.get_webview_window("audio") {
+        log_info!("关闭语音聊天窗口");
         win.close().ok();
     }
 
@@ -1304,7 +1496,9 @@ async fn desktop_work_complete(
     window: tauri::Window,
     turns: Option<Vec<Turn>>,
 ) -> Result<Value, String> {
+    log_info!("Command: desktop_work_complete");
     if !is_audio_sender(&window) {
+        log_error!("非音频窗口调用");
         return Ok(json!({ "ok": false }));
     }
 
@@ -1331,6 +1525,7 @@ async fn desktop_work_complete(
 
     tokio::time::sleep(Duration::from_millis(120)).await;
     if let Some(win) = app.get_webview_window("desktop") {
+        log_info!("关闭桌面协作窗口");
         win.close().ok();
     }
 
@@ -1343,7 +1538,9 @@ async fn audio_chat_generate_preset(
     window: tauri::Window,
     config: Option<Value>,
 ) -> Result<Value, String> {
+    log_info!("Command: audio_chat_generate_preset");
     if !is_main_sender(&window) {
+        log_error!("非主窗口调用");
         return Err("非法的预制语音请求".into());
     }
     generate_voice_preset(&app, &config.unwrap_or_else(|| json!({}))).await
@@ -1355,6 +1552,7 @@ async fn audio_chat_get_preset(
     window: tauri::Window,
     config: Option<Value>,
 ) -> Result<Option<Value>, String> {
+    log_info!("Command: audio_chat_get_preset");
     if !is_audio_sender(&window) {
         return Ok(None);
     }
@@ -1367,6 +1565,7 @@ async fn desktop_work_get_preset(
     window: tauri::Window,
     config: Option<Value>,
 ) -> Result<Option<Value>, String> {
+    log_info!("Command: desktop_work_get_preset");
     if !is_audio_sender(&window) {
         return Ok(None);
     }
@@ -1379,7 +1578,9 @@ async fn audio_chat_tts(
     window: tauri::Window,
     request: FishAudioRequest,
 ) -> Result<String, String> {
+    log_info!("Command: audio_chat_tts");
     if !is_audio_sender(&window) {
+        log_error!("非音频窗口调用");
         return Err("非法的 Fish Audio 请求".into());
     }
 
@@ -1397,6 +1598,7 @@ async fn audio_chat_tts(
     });
 
     let audio = request_fish_audio(&text, &config).await?;
+    log_info!("TTS 成功，返回 base64 音频");
     Ok(BASE64.encode(audio))
 }
 
@@ -1406,7 +1608,9 @@ async fn desktop_work_tts(
     window: tauri::Window,
     request: FishAudioRequest,
 ) -> Result<String, String> {
+    log_info!("Command: desktop_work_tts");
     if !is_audio_sender(&window) {
+        log_error!("非音频窗口调用");
         return Err("非法的 Fish Audio 请求".into());
     }
 
@@ -1424,6 +1628,7 @@ async fn desktop_work_tts(
     });
 
     let audio = request_fish_audio(&text, &config).await?;
+    log_info!("TTS 成功，返回 base64 音频");
     Ok(BASE64.encode(audio))
 }
 
@@ -1433,6 +1638,7 @@ async fn desktop_work_set_interactive(
     window: tauri::Window,
     value: bool,
 ) -> Result<Value, String> {
+    log_info!("Command: desktop_work_set_interactive, value={}", value);
     if !is_audio_sender(&window) {
         return Ok(json!({ "ok": false, "interactive": false }));
     }
@@ -1447,15 +1653,20 @@ async fn desktop_work_set_interactive(
         .unwrap_or(false);
 
     if !ok || app.get_webview_window("desktop").is_none() {
+        log_warn!("桌面协作会话不存在或窗口不存在");
         return Ok(json!({ "ok": false, "interactive": false }));
     }
 
     if let Some(win) = app.get_webview_window("desktop") {
         win.set_ignore_cursor_events(!value)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                log_error!("设置鼠标穿透失败: {}", e);
+                e.to_string()
+            })?;
     }
 
     state.desktop_mouse_interactive.store(value, Ordering::SeqCst);
+    log_info!("桌面交互状态更新为: {}", value);
 
     Ok(json!({ "ok": true, "interactive": value }))
 }
@@ -1466,7 +1677,9 @@ async fn xunfei_start(
     window: tauri::Window,
     credentials: XunfeiCredentials,
 ) -> Result<Value, String> {
+    log_info!("Command: xunfei_start");
     if !is_audio_sender(&window) {
+        log_error!("非音频窗口调用");
         return Err("非法的讯飞请求".into());
     }
 
@@ -1500,6 +1713,7 @@ async fn xunfei_start(
         result_rx,
     });
 
+    log_info!("讯飞会话已启动");
     Ok(json!({ "ok": true }))
 }
 
@@ -1509,6 +1723,7 @@ async fn xunfei_audio(
     window: tauri::Window,
     samples: Vec<f32>,
 ) -> Result<(), String> {
+    log_info!("Command: xunfei_audio, samples={}", samples.len());
     if !is_audio_sender(&window) {
         return Err("非法的讯飞请求".into());
     }
@@ -1522,6 +1737,7 @@ async fn xunfei_audio(
 
 #[tauri::command]
 async fn xunfei_finish(app: AppHandle, window: tauri::Window) -> Result<String, String> {
+    log_info!("Command: xunfei_finish");
     if !is_audio_sender(&window) {
         return Err("非法的讯飞请求".into());
     }
@@ -1532,18 +1748,28 @@ async fn xunfei_finish(app: AppHandle, window: tauri::Window) -> Result<String, 
         .lock()
         .unwrap()
         .take()
-        .ok_or_else(|| "讯飞会话不存在".to_string())?;
+        .ok_or_else(|| {
+            log_error!("讯飞会话不存在");
+            "讯飞会话不存在".to_string()
+        })?;
 
-    handle.finish_tx.send(()).map_err(|_| "讯飞会话已关闭".to_string())?;
+    handle.finish_tx.send(()).map_err(|_| {
+        log_error!("讯飞会话已关闭");
+        "讯飞会话已关闭".to_string()
+    })?;
 
     handle
         .result_rx
         .await
-        .map_err(|_| "讯飞会话已关闭".to_string())
+        .map_err(|_| {
+            log_error!("等待讯飞结果失败");
+            "讯飞会话已关闭".to_string()
+        })
 }
 
 #[tauri::command]
 async fn xunfei_abort(app: AppHandle, window: tauri::Window) -> Result<Value, String> {
+    log_info!("Command: xunfei_abort");
     if !is_audio_sender(&window) {
         return Ok(json!({ "ok": false }));
     }
@@ -1555,6 +1781,7 @@ async fn xunfei_abort(app: AppHandle, window: tauri::Window) -> Result<Value, St
 
 #[tauri::command]
 async fn renderer_ready(app: AppHandle, window: tauri::Window) -> Result<(), String> {
+    log_info!("Command: renderer_ready");
     if !is_main_sender(&window) {
         return Ok(());
     }
@@ -1573,6 +1800,7 @@ async fn app_state_update(
     window: tauri::Window,
     state_value: Value,
 ) -> Result<(), String> {
+    log_info!("Command: app_state_update, state={:?}", state_value);
     if !is_main_sender(&window) {
         return Ok(());
     }
@@ -1592,15 +1820,18 @@ async fn app_state_update(
 }
 
 pub fn run() {
+    log_info!("应用启动");
     tauri::Builder::default()
         .manage(AppState::default())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
                     if event.state == ShortcutState::Pressed {
+                        log_info!("全局快捷键触发: {:?}", _shortcut);
                         let app = app.clone();
                         tauri::async_runtime::spawn(async move {
                             if let Err(e) = capture_current_display_screenshot(&app).await {
+                                log_error!("截图失败: {}", e);
                                 if let Some(win) = app.get_webview_window("desktop") {
                                     win.emit("desktop-work:screenshot-error", e).ok();
                                 }
@@ -1640,8 +1871,16 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
         .run(|app_handle, event| {
-            if let tauri::RunEvent::Exit = event {
-                clear_desktop_shortcut(app_handle);
+            match event {
+                tauri::RunEvent::ExitRequested { .. } => {
+                    log_info!("应用退出请求");
+                    app_handle.state::<AppState>().is_quitting.store(true, Ordering::SeqCst);
+                }
+                tauri::RunEvent::Exit => {
+                    log_info!("应用退出，清理快捷键");
+                    clear_desktop_shortcut(app_handle);
+                }
+                _ => {}
             }
         });
 }
