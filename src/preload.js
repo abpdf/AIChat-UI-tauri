@@ -1,78 +1,70 @@
-//fake electronAPI
-  // ---------- Tauri 2.x 全局 API 安全获取 ----------
-  if (typeof window.__TAURI__ === 'undefined') {
-    // 纯浏览器调试时，给个空对象防报错
-    window.__TAURI__ = { core: { invoke: () => {} }, event: { listen: () => {} } };
-  }
-  // 2.x 中 invoke 在 core 命名空间下
-  const invoke = window.__TAURI__.core.invoke;
-  const { listen } = window.__TAURI__.event;
+// fake-electron-api.js
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 
-  // ---------- 完整模拟原 preload.js 的 electronAPI ----------
-  window.electronAPI = {
-    isElectron: true,
+// 全局挂载 electronAPI（兼容旧代码）
+window.electronAPI = {
+  isElectron: true,
 
-    // 窗口/会话操作
-    openAudioChat: (payload) => invoke('audio-chat:open', payload),
-    openDesktopWork: (payload) => invoke('desktop-work:open', payload),
-    getAudioChatSession: () => invoke('audio-chat:get-session'),
-    getDesktopWorkSession: () => invoke('desktop-work:get-session'),
-    checkpointAudioChat: (turns) => invoke('audio-chat:checkpoint', turns),
-    completeAudioChat: (turns) => invoke('audio-chat:complete', turns),
-    completeDesktopWork: (turns) => invoke('desktop-work:complete', turns),
+  // ====== 窗口与协作 ======
+  openAudioChat: (payload) => invoke('audio_chat_open', { payload }),
+  openDesktopWork: (payload) => invoke('desktop_work_open', { payload }),
 
-    // 事件监听（后端推送）
-    onAudioChatCompleted: (callback) => {
-      const unlisten = listen('ipc-back:audio-chat:completed', (e) => callback(e.payload));
-      return () => unlisten.then(f => f());
-    },
-    onTrayAction: (callback) => {
-      const unlisten = listen('ipc-back:tray:action', (e) => callback(e.payload));
-      return () => unlisten.then(f => f());
-    },
-    onDesktopScreenshotCaptured: (callback) => {
-      const unlisten = listen('ipc-back:desktop-work:screenshot-captured', (e) => callback(e.payload));
-      return () => unlisten.then(f => f());
-    },
-    onDesktopScreenshotError: (callback) => {
-      const unlisten = listen('ipc-back:desktop-work:screenshot-error', (e) => callback(e.payload));
-      return () => unlisten.then(f => f());
-    },
+  // ====== 会话状态 ======
+  getAudioChatSession: () => invoke('audio_chat_get_session'),
+  getDesktopWorkSession: () => invoke('desktop_work_get_session'),
+  checkpointAudioChat: (turns) => invoke('audio_chat_checkpoint', { turns }),
+  completeAudioChat: (turns) => invoke('audio_chat_complete', { turns }),
+  completeDesktopWork: (turns) => invoke('desktop_work_complete', { turns }),
 
-    // 讯飞语音
-    startXunfei: (credentials) => invoke('xunfei:start', credentials),
-    sendXunfeiAudio: (samples) => {
-      invoke('xunfei:audio', { samples: Array.from(samples || []) }).catch(e => console.warn(e));
-    },
-    finishXunfei: () => invoke('xunfei:finish'),
-    abortXunfei: () => invoke('xunfei:abort'),
-    onXunfeiPartial: (callback) => {
-      const unlisten = listen('ipc-back:xunfei:partial', (e) => callback(e.payload));
-      return () => unlisten.then(f => f());
-    },
-    onXunfeiFinal: (callback) => {
-      const unlisten = listen('ipc-back:xunfei:final', (e) => callback(e.payload));
-      return () => unlisten.then(f => f());
-    },
-    onXunfeiError: (callback) => {
-      const unlisten = listen('ipc-back:xunfei:error', (e) => callback(e.payload));
-      return () => unlisten.then(f => f());
-    },
+  // ====== 事件监听 ======
+  onAudioChatCompleted: (callback) => {
+    const unlistenPromise = listen('audio-chat:completed', (event) => callback(event.payload));
+    return () => unlistenPromise.then((unlisten) => unlisten());
+  },
+  onDesktopScreenshotCaptured: (callback) => {
+    const unlistenPromise = listen('desktop-work:screenshot-captured', (event) => callback(event.payload));
+    return () => unlistenPromise.then((unlisten) => unlisten());
+  },
+  onDesktopScreenshotError: (callback) => {
+    const unlistenPromise = listen('desktop-work:screenshot-error', (event) => callback(event.payload));
+    return () => unlistenPromise.then((unlisten) => unlisten());
+  },
+  onTrayAction: (callback) => {
+    const unlistenPromise = listen('tray:action', (event) => callback(event.payload));
+    return () => unlistenPromise.then((unlisten) => unlisten());
+  },
 
-    // TTS 与预设
-    generateVoicePreset: (config) => invoke('audio-chat:generate-preset', config),
-    getVoicePreset: (config) => invoke('audio-chat:get-preset', config),
-    getDesktopVoicePreset: (config) => invoke('desktop-work:get-preset', config),
-    requestFishSpeech: (request) => invoke('audio-chat:tts', request),
-    requestDesktopFishSpeech: (request) => invoke('desktop-work:tts', request),
+  // ====== Fish Audio 语音合成 ======
+  generateVoicePreset: (config) => invoke('audio_chat_generate_preset', { config }),
+  getVoicePreset: (config) => invoke('audio_chat_get_preset', { config }),
+  getDesktopVoicePreset: (config) => invoke('desktop_work_get_preset', { config }),
+  requestFishSpeech: (request) => invoke('audio_chat_tts', { request }),
+  requestDesktopFishSpeech: (request) => invoke('desktop_work_tts', { request }),
 
-    // 桌面交互
-    setDesktopWorkInteractive: (interactive) => invoke('desktop-work:set-interactive', interactive),
+  // ====== 桌面协作控制 ======
+  setDesktopWorkInteractive: (interactive) => invoke('desktop_work_set_interactive', { value: interactive }),
 
-    // 生命周期通知
-    signalRendererReady: () => invoke('renderer:ready'),
-    updateAppState: (state) => invoke('app-state:update', state),
-  };
+  // ====== 主窗口状态同步 ======
+  signalRendererReady: () => invoke('renderer_ready'),
+  updateAppState: (state) => invoke('app_state_update', { stateValue: state }),
 
-  window.ipcRenderer = window.electronAPI;
-  console.log('✅ [Shim] Tauri 2.x electronAPI mocked');
+  // ====== 讯飞语音识别 ======
+  startXunfei: (credentials) => invoke('xunfei_start', { credentials }),
+  sendXunfeiAudio: (samples) => invoke('xunfei_audio', { samples: Array.from(samples || []) }),
+  finishXunfei: () => invoke('xunfei_finish'),
+  abortXunfei: () => invoke('xunfei_abort'),
+
+  onXunfeiPartial: (callback) => {
+    const unlistenPromise = listen('xunfei:partial', (event) => callback(event.payload));
+    return () => unlistenPromise.then((unlisten) => unlisten());
+  },
+  onXunfeiFinal: (callback) => {
+    const unlistenPromise = listen('xunfei:final', (event) => callback(event.payload));
+    return () => unlistenPromise.then((unlisten) => unlisten());
+  },
+  onXunfeiError: (callback) => {
+    const unlistenPromise = listen('xunfei:error', (event) => callback(event.payload));
+    return () => unlistenPromise.then((unlisten) => unlisten());
+  },
+};
