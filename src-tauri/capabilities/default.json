@@ -4,6 +4,10 @@
   "description": "Capability for the main window",
   "windows": ["main", "audio", "desktop"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-emit",
+    "global-shortcut:allow-register",
+    "global-shortcut:allow-unregister"
   ]
 }
