@@ -1142,36 +1142,38 @@ async fn open_collaboration_window(
         let y = display_y + display_height - height - 12.0;
         log_info!("桌面协作窗口尺寸: {}x{}, 位置: ({}, {})", width, height, x, y);
 
-        WebviewWindowBuilder::new(&app, "desktop", WebviewUrl::App("desktopwork.html".into()))
-            .inner_size(width, height)
-            .min_inner_size(640.0, height)
-            .max_inner_size(10_000.0, height)
-            .position(x, y)
-            .visible(false)
-            .decorations(false)
-            .transparent(true)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .resizable(false)
-            .build()
-            .map_err(|e| {
-                log_error!("创建桌面协作窗口失败: {}", e);
-                e.to_string()
-            })?;
+       WebviewWindowBuilder::new(&app, "desktop", WebviewUrl::App("desktopwork.html".into()))
+        .inner_size(width, height)
+        .min_inner_size(640.0, height)
+        .max_inner_size(10_000.0, height)
+        .position(x, y)
+        .visible(false)                 // 保持初始隐藏
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .build()
+        .map_err(|e| { log_error!("创建桌面协作窗口失败: {}", e); e.to_string() })?;
 
-        if let Some(win) = app.get_webview_window("desktop") {
-            win.set_always_on_top(true).ok();
-            win.set_ignore_cursor_events(true).map_err(|e| {
-                log_error!("设置鼠标穿透失败: {}", e);
-                e.to_string()
-            })?;
-        }
+    if let Some(win) = app.get_webview_window("desktop") {
+        // 先显示
+        win.show().ok();
+        win.set_focus().ok();            // 可选
+        // 再设置置顶
+        win.set_always_on_top(true).ok();
+        // 最后设置鼠标穿透
+        win.set_ignore_cursor_events(true).map_err(|e| {
+            log_error!("设置鼠标穿透失败: {}", e);
+            e.to_string()
+        })?;
+    }
 
-        if let Some(main) = app.get_webview_window("main") {
-            main.minimize().ok();
-        }
+    if let Some(main) = app.get_webview_window("main") {
+        main.minimize().ok();
+    }
 
-        "desktop"
+    "desktop"
     } else {
         log_info!("创建语音聊天窗口");
         WebviewWindowBuilder::new(&app, "audio", WebviewUrl::App("audiochat.html".into()))
