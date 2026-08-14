@@ -1818,7 +1818,6 @@ async fn app_state_update(
 
     Ok(())
 }
-
 pub fn run() {
     log_info!("应用启动");
     tauri::Builder::default()
@@ -1872,9 +1871,14 @@ pub fn run() {
         .expect("error while running tauri application")
         .run(|app_handle, event| {
             match event {
-                tauri::RunEvent::ExitRequested { .. } => {
-                    log_info!("应用退出请求");
-                    app_handle.state::<AppState>().is_quitting.store(true, Ordering::SeqCst);
+                tauri::RunEvent::ExitRequested { api, .. } => {
+                    let state = app_handle.state::<AppState>();
+                    if !state.is_quitting.load(Ordering::SeqCst) {
+                        log_info!("阻止应用退出，保持后台运行");
+                        api.prevent_exit();  // 关键：阻止默认退出
+                    } else {
+                        log_info!("应用允许退出");
+                    }
                 }
                 tauri::RunEvent::Exit => {
                     log_info!("应用退出，清理快捷键");
