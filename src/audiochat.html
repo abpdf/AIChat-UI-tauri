@@ -11,7 +11,10 @@
         }
     </script>
     <title>AIUI 语音聊天</title>
-    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.27.0/dist/ort.min.js"></script>>
+    <script src="/dist/ort.min.js"></script>
+    <script type="module">
+        import * as ort from 'onnxruntime-web';
+    </script>
     <script src="/voicechat-api.js"></script>
     <style>
         * {
