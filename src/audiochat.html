@@ -562,7 +562,7 @@
         console.log(bridge)
         const desktopMode = document.documentElement.classList.contains('desktop-work');
         const ortRuntime = window.ort;
-        const VAD_MODEL_URL = '';
+        const VAD_MODEL_URL = '/silero_vad.onnx';
         const ORT_WASM_PATH = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.27.0/dist/';
 
         function mergeFloat32(chunks) {
