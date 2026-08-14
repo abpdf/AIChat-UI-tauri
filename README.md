@@ -2,6 +2,7 @@
 
 Some function will NOT work properly.
 
+本程序将不再添加 JHCWColin/AIChat-UI 中更新的新功能，v6.0.0 已经足够好。（鉴于原作者十分强大）
 ---
 <div align="center">
 
@@ -11,7 +12,7 @@ Some function will NOT work properly.
 
 ### Your Next Gen Vibe Coding Toolkit
 
-基于前端页面与 Electron 的 AI 对话桌面应用，覆盖文字聊天、Canvas 编码、语音聊天、附件解析、图像生成与 Windows 本地打包。
+基于前端页面与 Tauri 的 AI 对话桌面应用，覆盖文字聊天、Canvas 编码、语音聊天、附件解析、图像生成与 Windows 本地打包。
 
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Version](https://img.shields.io/badge/version-V6.0.0_Canary_3-blue)]()
@@ -22,7 +23,7 @@ Some function will NOT work properly.
 
 ## 项目概览
 
-AIUI 是一个以单页前端为核心、同时提供 Electron 桌面壳的 AI 工作台。当前版本重点覆盖以下能力：
+AIUI 是一个以单页前端为核心、同时提供 Tauri 桌面壳的 AI 工作台。当前版本重点覆盖以下能力：
 
 - `/canvas` 编码模式：在对话旁直接生成和编辑代码画布。
 - 多模型聊天：可配置 API Key、Base URL、模型列表和默认模型。
@@ -185,16 +186,16 @@ cargo tauri build
 - `audiochat.html`：语音聊天界面
 - `desktopwork.html`：桌面协作窗口入口
 - `voicechat-api.js`：独立语音/协作窗口共用 API 适配层
-- `main.js`：Electron 主进程
-- `preload.js`：Electron 预加载桥接
+- `preload.js`：包装以 electreoAPI 为外壳的TauriAPI
 - `package.json`：版本、脚本与构建配置
 - `UPDATE.md`：版本更新记录
-
+- `src-tauri`：后端 rust 程序
+- - `src`：前段代码
 ---
 
 ## 版本信息
 
-- 当前版本：`V6.0.0 Canary 3 tauri ver`
+- 当前版本：`V6.0.0 tauri ver`
 
 ---
 
